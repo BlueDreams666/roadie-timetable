@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Roadie</title>
+<style>
+  :root { --bg:#0b0f0d; --card:#1b211e; --text:#f2f5f3; --muted:#9aa5a0; --green:#22c063; --orange:#f39c32; color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: -apple-system, system-ui, "Segoe UI", Arial, sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width: 520px; margin: 0 auto; padding: 16px; }
+  .card { background:var(--card); border-radius:18px; padding:18px; margin-bottom:12px; }
+  .badge { display:inline-block; background:var(--green); color:#fff; font-weight:800; border-radius:8px; padding:2px 10px; font-size:20px; }
+  h1 { font-size:22px; margin:10px 0 4px; }
+  .big { font-size:34px; font-weight:800; margin:6px 0; font-variant-numeric: tabular-nums; }
+  .muted { color:var(--muted); font-size:15px; }
+  .late { color:var(--orange); }
+  .live { color:var(--green); font-weight:700; }
+  iframe { width:100%; height:300px; border:0; border-radius:14px; background:#222; }
+  footer { color:var(--muted); font-size:12px; text-align:center; margin-top:8px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <span class="badge" id="line">…</span>
+    <h1 id="title">…</h1>
+    <div class="big" id="eta">…</div>
+    <div class="muted" id="detail"></div>
+    <div class="muted" id="seen"></div>
+  </div>
+  <div class="card" style="padding:8px"><iframe id="map" title="map"></iframe>
+    <a id="open" class="muted" style="display:block;text-align:center;padding:10px 0 4px;color:var(--green);text-decoration:none" href="#"></a></div>
+  <footer id="foot"></footer>
+</main>
+<script>
+// Shared from Roadie. Everything about the trip is in the part of the link after "#", which browsers never send to
+// the server. This page asks Hasadna's Open Bus API (a public volunteer service) where the bus is, every 30 s.
+const T = {
+  he: { to: "אל", arr: "הגעה בערך", late: "באיחור של", early: "מוקדם ב", min: "דק׳", ontime: "בזמן", stops: "תחנות עד היעד",
+        seen: "עודכן לפני", sec: "שנ׳", open: "לפתוח במפות", none: "אין עדיין מיקום חי לאוטובוס. לפי לוח הזמנים:", arrived: "האוטובוס הגיע ליעד",
+        foot: "נשלח מ־Roadie. מיקום האוטובוס מ־Open Bus של הסדנא לידע ציבורי. לא מיקום הטלפון.", bad: "הקישור לא שלם." },
+  en: { to: "to", arr: "Arriving about", late: "late by", early: "early by", min: "min", ontime: "on time", stops: "stops to go",
+        seen: "Updated", sec: "s ago", open: "Open in Maps", none: "No live position for the bus yet. By the timetable:", arrived: "The bus has reached the stop",
+        foot: "Shared from Roadie. Bus position from Hasadna's Open Bus project, not the phone's location.", bad: "This link is incomplete." },
+  ar: { to: "إلى", arr: "الوصول نحو", late: "متأخر", early: "مبكر", min: "د", ontime: "في الموعد", stops: "محطات متبقية",
+        seen: "تحديث منذ", sec: "ث", open: "فتح في الخرائط", none: "لا موقع مباشر للحافلة بعد. حسب الجدول:", arrived: "وصلت الحافلة",
+        foot: "مُرسل من Roadie. موقع الحافلة من مشروع Open Bus، وليس موقع الهاتف.", bad: "الرابط غير مكتمل." },
+  ru: { to: "до", arr: "Прибытие около", late: "опаздывает на", early: "раньше на", min: "мин", ontime: "по расписанию", stops: "остановок осталось",
+        seen: "Обновлено", sec: "с назад", open: "Открыть в картах", none: "Живой позиции автобуса пока нет. По расписанию:", arrived: "Автобус прибыл",
+        foot: "Отправлено из Roadie. Позиция автобуса от проекта Open Bus, не местоположение телефона.", bad: "Ссылка неполная." }
+};
+const lang = (navigator.language || "he").slice(0, 2);
+const t = T[lang] || T.he;
+if (!["he", "ar"].includes(lang)) { document.documentElement.dir = "ltr"; document.documentElement.lang = lang; }
+document.getElementById("foot").textContent = t.foot;
+
+const p = new URLSearchParams(location.hash.slice(1));
+const route = p.get("r"), journey = p.get("j"), date = p.get("d"), line = p.get("l") || "", dest = p.get("to") || "";
+// s = lat,lon,seconds;lat,lon,seconds… for the ride from boarding to the stop to get off (timetable seconds of day)
+const stops = (p.get("s") || "").split(";").map(x => x.split(",").map(Number)).filter(a => a.length === 3 && a.every(isFinite));
+
+function clock(sec) { sec = ((Math.round(sec) % 86400) + 86400) % 86400; return String(Math.floor(sec / 3600)).padStart(2, "0") + ":" + String(Math.floor(sec / 60) % 60).padStart(2, "0"); }
+function israelSeconds(d) {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Jerusalem", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).formatToParts(d);
+  const g = k => Number(parts.find(x => x.type === k).value);
+  return (g("hour") % 24) * 3600 + g("minute") * 60 + g("second");
+}
+// Fix time in the trip's clock (trips past midnight run past 24:00).
+function tripClock(d) { let s = israelSeconds(d); if (stops.length && stops[0][2] > 64800 && s < 43200) s += 86400; return s; }
+
+function project(lat, lon) {
+  const k = Math.cos(lat * Math.PI / 180), xy = ([a, b]) => [(b - lon) * k * 111320, (a - lat) * 111320];
+  let best = Infinity, prog = 0;
+  for (let i = 0; i < stops.length - 1; i++) {
+    const [ax, ay] = xy(stops[i]), [bx, by] = xy(stops[i + 1]);
+    const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+    const u = l2 > 0 ? Math.min(1, Math.max(0, -(ax * dx + ay * dy) / l2)) : 0;
+    const d = Math.hypot(ax + u * dx, ay + u * dy);
+    if (d < best) { best = d; prog = i + u; }
+  }
+  return best < 600 ? prog : null;
+}
+function scheduledAt(prog) {
+  const i = Math.min(Math.floor(prog), stops.length - 1);
+  if (i >= stops.length - 1) return stops[stops.length - 1][2];
+  return stops[i][2] + (stops[i + 1][2] - stops[i][2]) * (prog - i);
+}
+function map(lat, lon) {
+  const d = 0.012;
+  const src = `https://www.openstreetmap.org/export/embed.html?bbox=${lon - d},${lat - d * 0.7},${lon + d},${lat + d * 0.7}&layer=mapnik&marker=${lat},${lon}`;
+  const f = document.getElementById("map");
+  if (f.src !== src) f.src = src;
+  const a = document.getElementById("open");
+  a.textContent = t.open;
+  a.href = `https://maps.apple.com/?ll=${lat},${lon}&q=${encodeURIComponent(line)}`;
+}
+
+document.getElementById("line").textContent = line;
+document.getElementById("title").textContent = `${t.to} ${dest}`;
+if (!route || !journey || !date || stops.length < 2) {
+  document.getElementById("eta").textContent = t.bad;
+} else {
+  map(stops[0][0], stops[0][1]);
+  refresh();
+  setInterval(refresh, 30000);
+}
+
+async function refresh() {
+  const last = stops[stops.length - 1];
+  try {
+    const now = new Date(), from = new Date(now - 6 * 60000);
+    const iso = d => d.toISOString().slice(0, 19) + "Z";
+    const url = `https://open-bus-stride-api.hasadna.org.il/siri_vehicle_locations/list?siri_routes__ids=${encodeURIComponent(route)}` +
+      `&recorded_at_time_from=${iso(from)}&recorded_at_time_to=${iso(now)}&limit=300`;
+    const rows = await (await fetch(url)).json();
+    const ref = `${date}-${journey}`;
+    const mine = rows.filter(r => r.siri_ride__journey_ref === ref).sort((a, b) => a.recorded_at_time < b.recorded_at_time ? 1 : -1)[0];
+    if (!mine) throw new Error("no fix");
+    const prog = project(mine.lat, mine.lon);
+    map(mine.lat, mine.lon);
+    const seenAgo = Math.max(0, Math.round((now - new Date(mine.recorded_at_time)) / 1000));
+    document.getElementById("seen").innerHTML = `<span class="live">●</span> ${t.seen} ${seenAgo} ${t.sec}`;
+    if (prog === null) throw new Error("off route");
+    if (prog >= stops.length - 1.05) { document.getElementById("eta").textContent = t.arrived; document.getElementById("detail").textContent = ""; return; }
+    const delay = tripClock(new Date(mine.recorded_at_time)) - scheduledAt(prog);
+    const eta = last[2] + delay, m = Math.round(Math.abs(delay) / 60);
+    document.getElementById("eta").textContent = `${t.arr} ${clock(eta)}`;
+    const left = Math.max(1, stops.length - 1 - Math.floor(prog));
+    const lateText = m === 0 ? t.ontime : `<span class="${delay > 0 ? "late" : ""}">${delay > 0 ? t.late : t.early} ${m} ${t.min}</span>`;
+    document.getElementById("detail").innerHTML = `${lateText} · ${left} ${t.stops}`;
+  } catch (e) {
+    document.getElementById("eta").textContent = `${t.arr} ${clock(last[2])}`;
+    document.getElementById("detail").textContent = t.none;
+  }
+}
+</script>
+</body>
+</html>
