@@ -1,0 +1,10 @@
+{
+  "calendarEnd" : 20261221,
+  "calendarStart" : 20261121,
+  "sha256" : "29821234c42149ee26742fa5ef20217aaee911776370310ab4dde27a72d8e368",
+  "size" : 22447951,
+  "stops" : 35393,
+  "trips" : 272453,
+  "url" : "https://raw.githubusercontent.com/BlueDreams666/roadie-timetable/main/israel.roadiedb",
+  "version" : "2026-11-21T08:37:30Z"
+}
